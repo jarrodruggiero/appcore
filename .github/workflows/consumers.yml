@@ -1,0 +1,62 @@
+# Run the applications' suites against THIS revision of appcore.
+#
+# The applications pin a revision, so nothing they do reacts to a push here —
+# which is the point, and also the gap. This closes it: a change to appcore is
+# tested against the code that will eventually pin it, before anybody moves a
+# pin and discovers the break in their own repository.
+#
+# It runs on the pull request rather than only on main, because "you cannot
+# merge this without breaking stocktake" is worth knowing before the merge.
+name: Consumers
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: consumers-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every application that pins appcore. Add one when it starts to.
+        consumer: [stocktake]
+    steps:
+      - name: Check out ${{ matrix.consumer }}
+        uses: actions/checkout@v7
+        with:
+          repository: jarrodruggiero/${{ matrix.consumer }}
+          path: consumer
+
+      - name: Check out this appcore
+        uses: actions/checkout@v7
+        with:
+          path: appcore
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # Point the consumer at this checkout instead of the revision it pins.
+      # `uv add --editable` rewrites the source and re-locks, which is what
+      # actually takes effect — `uv pip install -e` leaves the pinned copy
+      # installed and silently wins, which was verified rather than assumed.
+      - name: Use this appcore instead of the pinned one
+        working-directory: consumer
+        run: |
+          uv add --editable ../appcore
+          uv sync --dev
+
+      - name: Test ${{ matrix.consumer }}
+        working-directory: consumer
+        run: uv run pytest
