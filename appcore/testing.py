@@ -110,6 +110,11 @@ class FakeIdp:
         is breaking: `logout_token(nonce="n")`, `logout_token(jti=None)`,
         `logout_token(events={...})`. Passing None for a claim removes it,
         which is how "required and missing" is expressed.
+
+        **`self.claims` is deliberately NOT merged.** It configures the ID
+        token, and after any sign-in it holds that sign-in's `nonce` — which
+        would make the next logout token carry one, and a logout token with a
+        nonce is refused by design. Use `**overrides` here instead.
         """
         import jwt
 
@@ -123,7 +128,6 @@ class FakeIdp:
             "jti": "logout-token-1",
             "sid": "session-1",
             "events": {BACKCHANNEL_EVENT: {}},
-            **self.claims,
             **overrides,
         }
         return jwt.encode({k: v for k, v in claims.items() if v is not None},
