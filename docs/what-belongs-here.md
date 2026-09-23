@@ -31,6 +31,7 @@ This is the split done properly, and it is worth copying.
 | Discovery, PKCE, the code exchange | Which account an identity signs in as |
 | Verifying an ID token — signature, issuer, audience, expiry, nonce | Whether an unknown subject may create an account |
 | Returning an `Identity` | Storing it, linking it, provisioning it |
+| Verifying a `logout_token` — and refusing an ID token dressed as one | Which sessions that ends, and the endpoint it arrives at |
 | A provider to test against | Fixtures about that application's users |
 
 `oidc.complete()` returns a verified `Identity` and **stops**. Everything after
@@ -42,6 +43,19 @@ that point is a decision about an application's users:
 - **Provisioning** — off, invite-only or open is a statement about who a
   household's directory contains. appcore has no opinion.
 - **Sessions** — appcore does not know what a session is here.
+
+Back-channel logout is the same split seen from the other end, and a useful
+test of whether the line is real. `verify_logout_token()` does the protocol —
+the signature, the issuer and audience, the `events` claim, and the two checks
+that stop an *ID token* being accepted as an instruction to log somebody out.
+It returns a `LogoutNotice` saying what the provider named and **stops**.
+
+Everything past that is the application's, and none of it could live here:
+which sessions a `sid` corresponds to, whether a `sub` should end all of them,
+what the endpoint's path is, and — the one that matters most — that a logout
+must **not** deactivate the account. That last is a policy about how much
+authority a provider holds over a local login, which is exactly the kind of
+answer appcore may provide the mechanism for and must not choose.
 
 The tell: none of `models`, `User`, `Session` or any application's settings
 class appears anywhere in this repository.

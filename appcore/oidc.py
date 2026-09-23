@@ -41,6 +41,13 @@ TIMEOUT_SECONDS = 10
 USER_AGENT = "appcore"
 
 
+# The one member a back-channel logout token's `events` claim must carry.
+# Checking it is what stops an ID TOKEN being accepted as an instruction to log
+# somebody out: same key, same issuer, same audience, and the token an attacker
+# is most likely to have seen.
+BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout"
+
+
 class OidcError(Exception):
     """A sign-in that could not be completed. The message is safe to show."""
 
@@ -74,6 +81,30 @@ class Identity:
     email: str | None
     email_verified: bool
     name: str | None
+    # NOT a claim about the person: `sid` identifies the PROVIDER'S session,
+    # and it is here because it arrives in the same token and nothing else can
+    # carry it. An application that stores it can end exactly the session a
+    # back-channel logout names, rather than every session this subject holds.
+    # None when the provider issues no `sid`.
+    session_id: str | None = None
+
+
+@dataclass(frozen=True)
+class LogoutNotice:
+    """A verified instruction from the provider that a session has ended.
+
+    `session_id` is the precise form and `subject` the blunt one. A token may
+    carry either — the spec requires at least one — so the caller is told which
+    it got rather than handed one shape and left to guess: ending every session
+    for a subject when the provider named one is more than it asked for.
+
+    What to DO about it is the application's. This says only that a genuine
+    provider said so, and about whom.
+    """
+
+    issuer: str
+    subject: str | None
+    session_id: str | None
 
 
 # --------------------------------------------------------------------------- #
@@ -278,4 +309,74 @@ def _verify(provider: Provider, raw: str, *, nonce: str) -> Identity:
         # unverified address ends up trusted enough to match an account.
         email_verified=bool(claims.get("email_verified")),
         name=claims.get("name") or claims.get("preferred_username"),
+        # Stored by the application, used by back-channel logout. Protocol
+        # machinery rather than a statement about the person — see `Identity`.
+        session_id=claims.get("sid"),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# The provider telling us a session ended
+# --------------------------------------------------------------------------- #
+
+def verify_logout_token(provider: Provider, raw: str) -> LogoutNotice:
+    """Check a back-channel `logout_token` and say what it names.
+
+    **The signature is the whole authentication.** There is no client secret on
+    this endpoint — the spec is explicit that the signed token exists "to
+    prevent denial of service attacks by enabling the RP to verify that the
+    logout request is coming from a legitimate party". So a PUBLIC client can
+    implement this fully, and every check below is load-bearing.
+
+    Two of those checks exist to stop an **ID token** being accepted as an
+    instruction to log somebody out. An ID token carries the same signature,
+    issuer and audience, and is the token most likely to have been seen by
+    somebody — so the spec requires an `events` claim naming back-channel
+    logout, and forbids a `nonce`. Both are checked here.
+
+    `jti` is required and NOT remembered. Replaying an ID token would be a
+    sign-in; replaying a logout token ends a session that is already ended, so
+    the ledger a replay cache would cost buys an idempotent no-op. A token
+    missing `jti` is still refused, because it is not a conforming one.
+
+    Returns what the provider named. It does not decide what to end: sessions
+    are the application's, and this module does not know what one is here.
+    """
+    import jwt  # noqa: PLC0415 - imported on use, like the other optional deps
+    from jwt import PyJWKClient  # noqa: PLC0415
+
+    document = discover(provider)
+    try:
+        key = PyJWKClient(document["jwks_uri"]).get_signing_key_from_jwt(raw)
+        claims = jwt.decode(
+            raw,
+            key.key,
+            algorithms=document.get("id_token_signing_alg_values_supported")
+            or ["RS256"],
+            audience=provider.client_id,
+            issuer=provider.issuer,
+            # `exp` is not in the spec's required list, but PyJWT enforces it
+            # when present and a provider that sends one means it.
+            options={"require": ["iat", "iss", "aud", "jti"]},
+        )
+    except Exception as exc:
+        raise OidcError(f"That logout could not be verified: {exc}") from exc
+
+    # A logout token MUST NOT carry a nonce. Its presence means this is an ID
+    # token wearing a costume — see the docstring.
+    if "nonce" in claims:
+        raise OidcError("That logout token carries a nonce, so it is not one.")
+
+    events = claims.get("events")
+    if not isinstance(events, dict) or BACKCHANNEL_EVENT not in events:
+        raise OidcError("That token does not announce a back-channel logout.")
+
+    subject, session_id = claims.get("sub"), claims.get("sid")
+    if not subject and not session_id:
+        raise OidcError("That logout token names neither a session nor a subject.")
+
+    return LogoutNotice(
+        issuer=str(claims["iss"]),
+        subject=str(subject) if subject else None,
+        session_id=str(session_id) if session_id else None,
     )
