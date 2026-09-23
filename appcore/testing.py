@@ -30,6 +30,11 @@ import datetime as dt
 import json
 from typing import Any
 
+# The one member a logout token's `events` claim must carry. Taken from `oidc`
+# rather than spelled twice: a test asserting that a WRONG event is refused
+# needs the right one to contrast against, and two copies would drift.
+from .oidc import BACKCHANNEL_EVENT
+
 DEFAULT_ISSUER = "https://idp.example.test"
 DEFAULT_CLIENT_ID = "an-application"
 
@@ -95,6 +100,34 @@ class FakeIdp:
             **overrides,
         }
         return jwt.encode(claims, self.key, algorithm="RS256",
+                          headers={"kid": self.kid})
+
+    def logout_token(self, **overrides) -> str:
+        """A back-channel logout token, signed with the same key.
+
+        Shipped here rather than hand-rolled per application, and defaulting to
+        a CONFORMING token so a test that wants a refusal says which claim it
+        is breaking: `logout_token(nonce="n")`, `logout_token(jti=None)`,
+        `logout_token(events={...})`. Passing None for a claim removes it,
+        which is how "required and missing" is expressed.
+        """
+        import jwt
+
+        now = dt.datetime.now(dt.UTC)
+        claims = {
+            "iss": self.issuer,
+            "sub": "idp-subject-1",
+            "aud": self.client_id,
+            "iat": now,
+            "exp": now + dt.timedelta(minutes=2),
+            "jti": "logout-token-1",
+            "sid": "session-1",
+            "events": {BACKCHANNEL_EVENT: {}},
+            **self.claims,
+            **overrides,
+        }
+        return jwt.encode({k: v for k, v in claims.items() if v is not None},
+                          self.key, algorithm="RS256",
                           headers={"kid": self.kid})
 
     # -- the stubs that stand in for the network ---------------------------- #
