@@ -180,3 +180,23 @@ def test_an_expired_token_is_refused(idp, provider):
         oidc.verify_logout_token(
             provider,
             idp.logout_token(exp=dt.datetime.now(dt.UTC) - dt.timedelta(hours=1)))
+
+
+def test_an_id_tokens_claim_overrides_do_not_leak_into_a_logout_token(idp, provider):
+    """`claims` configures the ID TOKEN. A logout token must not inherit it.
+
+    Found from a consumer: after any sign-in, `claims` holds the `nonce` that
+    the sign-in needed — so the next `logout_token()` carried one, and
+    `verify_logout_token` refused it for exactly the right reason. The fake was
+    producing a non-conforming token and the trap was invisible, because the
+    error named the nonce rather than the fixture.
+
+    Worse than an inconvenience: a consumer debugging that could reasonably
+    "fix" it by relaxing the nonce check, which is one of the two things
+    stopping an ID token being accepted as a logout instruction.
+    """
+    idp.claims = {"nonce": "from-a-sign-in", "email": "someone@example.test"}
+
+    notice = oidc.verify_logout_token(provider, idp.logout_token(sid="sess-2"))
+
+    assert notice.session_id == "sess-2"
