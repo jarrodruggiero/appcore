@@ -1,0 +1,14 @@
+# The workflows pin each action to a commit, so a moved tag cannot change what
+# runs. This is what moves the pins forward; CI gates each update.
+#
+# Python dependencies are not listed: a security fix for one still arrives on
+# its own, and the applications' locks decide what actually runs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
